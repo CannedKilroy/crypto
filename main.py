@@ -40,8 +40,8 @@ async def watch_order_book(exchange, symbol, orderbook_depth, db):
             db.insert_one(table_name = 'orderbook',
                           data = (orderbook['symbol'],
                                        orderbook['timestamp'],
-                                       json.dumps(asks),
-                                       json.dumps(bids),
+                                       json.dumps(orderbook['asks']),
+                                       json.dumps(orderbook['bids']),
                                        orderbook['nonce'],
                                        orderbook['datetime'])
                           )
