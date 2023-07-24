@@ -212,13 +212,15 @@ async def main():
         except ccxt.ExchangeError as e:
             print(f"{exchange} failed due to an exchange error: {str(e)}")
             db.insert_one(table_name = logs,
-                          data = (time.time(), e.args[0]))            
+                          data = (time.time(), e.args[0]))
+            time.sleep(timeout)
             continue
         
         except Exception as e:
             print(type(e).__name__, str(e))
             db.insert_one(table_name = 'logs',
-                          data = (time.time(), e.args[0]))            
+                          data = (time.time(), e.args[0]))
+            time.sleep(timeout)            
             continue
             
     await exchange.close()
