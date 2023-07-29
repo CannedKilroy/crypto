@@ -51,7 +51,24 @@ class Database:
             count = c.fetchone()[0]
             
             return count == 1
-    
+            
+    def parse_object(self, obj):
+        '''
+        Returns equivalent sqlite3 object type from python type.
+
+        :param obj: Object type to be converted
+        '''
+        if type(obj) is str:
+            return 'TEXT'
+        if type(obj) is int:
+            return 'INTEGER'
+        if type(obj) is float:
+            return 'REAL'
+        if type(obj) is list:
+            return json.dumps(obj)
+        print(type(object))
+        return 'TEXT'
+        
     def create_table(self, table_name:str, columns:list, drop_table = False, primary_key = None):
         """
         Create a table
