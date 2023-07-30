@@ -81,13 +81,17 @@ class Database:
         with self.connection_manager.conn:
             c = self.connection_manager.conn.cursor()
             
-            if self._table_exists(table_name) == True:
-                print(f"Table {table_name} exists")
-            
-            if drop_table:
+            if self._table_exists(table_name) == False:
+                print('Table does not exist')
+            elif drop_table:
                 c.execute(f'''DROP TABLE IF EXISTS {table_name}''')
-                print(f"Table {table_name} dropped")
+                print(f"Existing table {table_name} was dropped")
+            else:
+                print(f"Table {table_name} already exists")
+                return
             
+            self.tables[table_name] = [column for column, _ in columns]
+
             print(f"Creating table {table_name}")
             
             column_definitions = ', '.join([f"{column} {data_type}" for column, data_type in columns])
@@ -95,15 +99,15 @@ class Database:
             
             if primary_key:
                 create_table_query += f", PRIMARY KEY ({primary_key})"
-            
+            if unique:
+                create_table_query += ', UNIQUE(' + ', '.join(name for name, _ in columns) + ')'
+                
             create_table_query += ")"
-            print(create_table_query)
             try:
                 c.execute(create_table_query)
             except Exception as e:
                 raise e
             
-            self.tables[table_name] = [column for column, _ in columns]
             print(f"Table '{table_name}' created\n")
     
     def insert_one(self, table_name:str, data:tuple):
@@ -201,6 +205,7 @@ if __name__ == "__main__":
         'BTC/USD:BTC',
         1689575104554
     )
+    db.insert_one(table_name='orderbook', data=data)
     db.insert_one(table_name='orderbook', data=data)
 
     # Return all rows from 'orderbook'
