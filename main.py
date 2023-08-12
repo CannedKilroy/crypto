@@ -9,7 +9,7 @@ import numpy as np
 import sys
 import datetime
 
-from storagev2 import meta, table_ohlcv, table_orderbook, table_trades, table_ticker, table_logs
+from storage import meta, table_ohlcv, table_orderbook, table_trades, table_ticker, table_logs
 from sqlalchemy import create_engine
 
 #symbols
