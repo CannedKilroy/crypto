@@ -7,86 +7,105 @@ import json
 import pprint
 import numpy as np
 import sys
+import datetime
 
-from settings import (
-btc_inverse_perp,
-btc_linear_perp,
-timeframe,
-orderbook_depth,
-timeout,
-candle_limit,
-tables
-)
-from storage import Database, ConnectionManager
+from storagev2 import meta, table_ohlcv, table_orderbook, table_trades, table_ticker, table_logs
+from sqlalchemy import create_engine
+
+#symbols
+btc_inverse_perp = 'BTC/USD:BTC'
+btc_linear_perp = 'BTC/USDT:USDT'
+
+#settings
+timeframe = '1m'
+orderbook_depth = 50
+timeout = 10 #seconds
+candle_limit = 1
 
 print('Python version: ', sys.version_info)
+if sys.version_info < (3,7):
+    print("This script requires Python 3.7 or higher.")
+    sys.exit(1)
 print('CCXT version', ccxt.pro.__version__)
 print('Supported exchanges:', ccxt.pro.exchanges)
 
+engine = create_engine('sqlite:///data.db', echo = False)
+meta.create_all(engine)
+
 #https://github.com/ccxt/ccxt/blob/master/examples/ccxt.pro/py/one-exchange-different-streams.py
-async def watch_order_book(exchange, symbol, orderbook_depth, db):
+async def watch_order_book(exchange, symbol, orderbook_depth):
     '''
     Watch the order book for a specific symbol.
-
+    Orderbook is unique from api, updates on deltas
+    
     :param exchange: The exchange object
     :param symbol: The trading symbol
     :param orderbook_depth: The depth of the order book
-    :param db: The database object
     '''
+    last_orderbook = None
+    name = getattr(exchange, 'name')
+    
     while True:
         try:
-            
             orderbook = await exchange.watch_order_book(symbol, orderbook_depth)
-            db.insert_one(table_name = 'orderbook',
-                          data = (orderbook['symbol'],
-                                       orderbook['timestamp'],
-                                       json.dumps(orderbook['asks']),
-                                       json.dumps(orderbook['bids']),
-                                       orderbook['nonce'],
-                                       orderbook['datetime'])
-                          )
+                
+            with engine.connect() as conn:
+                command = table_orderbook.insert().values(
+                    exchange = name,
+                    symbol = orderbook['symbol'],
+                    asks = orderbook['asks'],
+                    bids = orderbook['bids'],
+                    nonce = orderbook['nonce'],
+                    created_at = orderbook['timestamp']
+                    )
+                conn.execute(command)
+                conn.commit()
+        
         except Exception as e:
             print(str(e))
             raise e
     
-async def watch_trades(exchange, symbol, db):
+async def watch_trades(exchange, symbol):
     '''
     Watch the trades for a specific symbol.
-
+    Trades are unique from the api
+    
     :param exchange: The exchange object
     :param symbol: The trading symbol
-    :param db: The database object
     '''
+    table_created = None
+    name = getattr(exchange, 'name')
+    
     while True:
         try:
-            
             trades = await exchange.watch_trades(symbol)
-            for trade in trades:
-                
-                #convert from scinetific notation to decimal
-                cost = np.format_float_positional(trade['cost'])
-                
-                db.insert_one(table_name = 'trades',
-                          data = (trade['symbol'],
-                                  trade['timestamp'],
-                                  trade['id'],
-                                  trade['order'],
-                                  trade['type'],
-                                  trade['side'],
-                                  trade['takerOrMaker'],
-                                  trade['price'],
-                                  trade['amount'],
-                                  cost, #decimal, in base currency
-                                  json.dumps(trade['info']),
-                                  trade['datetime']
-                                  ))
-        
+            
+            with engine.connect() as conn:
+                for trade in trades:
+                    command = table_trades.insert().values(
+                    exchange = name,
+                    trade_id = trade['id'],
+                    order_id = trade['order'],
+                    order_type = trade['type'],
+                    trade_side = trade['side'],
+                    takerormaker = trade['takerOrMaker'],
+                    executed_price = trade['price'],
+                    base_amount = trade['amount'],
+                    cost = trade['cost'],
+                    fee = trade['fee'],
+                    fees = trade['fees'],
+                    datetime = datetime.datetime.fromisoformat(trade['datetime']),
+                    created_at = trade['timestamp']
+                    )
+                    
+                    conn.execute(command)
+                    conn.commit()
+                    
         except Exception as e:
             print(str(e))
-            raise e        
+            raise e
 
-
-async def watch_ohlcv(exchange, symbol, timeframe, candle_limit, db):
+async def watch_ohlcv(exchange, symbol, timeframe, candle_limit):
     #https://github.com/ccxt/ccxt/blob/master/examples/ccxt.pro/py/build-ohlcv-many-symbols.py
     '''
     Watch the OHLCV data for a specific symbol.
@@ -95,134 +114,128 @@ async def watch_ohlcv(exchange, symbol, timeframe, candle_limit, db):
     :param symbol: The trading symbol
     :param timeframe: The timeframe for the OHLCV data
     :param candle_limit: The number of candles to fetch
-    :param db: The database object
     '''
     last_candle = None
+    name = getattr(exchange, 'name')
     
     while True:
         try:
             candle = await exchange.watch_ohlcv(symbol, timeframe, None, candle_limit)
-            print(candle)
+            
             if last_candle is None:
                 last_candle = candle
             
+            #if timestamps are not equal
             if last_candle[0][0] != candle[0][0]:
-                db.insert_one(table_name='ohlcv',
-                              data=(symbol,) + tuple(last_candle[0]))
-            
+                
+                with engine.connect() as conn:
+                    command = table_ohlcv.insert().values(
+                        exchange = name,
+                        symbol = symbol,
+                        open_price = last_candle[0][1],
+                        high_price = last_candle[0][2],
+                        low_price = last_candle[0][3],
+                        close_price = last_candle[0][4],
+                        candle_volume = last_candle[0][5],
+                        utc_timestamp = last_candle[0][0]
+                        )
+                
+                    conn.execute(command)
+                    conn.commit()
             last_candle = candle
-            db.return_all('ohlcv')
             
         except Exception as e:
             print(str(e))
             raise e
-
-async def watch_ticker(exchange, symbol, db):
+            
+async def watch_ticker(exchange, symbol):
     '''
     Watch the ticker of an exchange for a specific symbol.
 
     :param exchange: The exchange object
     :param symbol: The trading symbol
-    :param db: The database object
-    
     '''
+    name = getattr(exchange, 'name')
+    last_ticker = None
+        
     while True:
         try:
             ticker = await exchange.watch_ticker(symbol)
-            db.insert_one(table_name = 'ticker',
-                          data = (ticker['symbol'],
-                                  ticker['timestamp'],
-                                  ticker['ask'],
-                                  ticker['askVolume'],
-                                  ticker['bid'],
-                                  ticker['bidVolume'],
-                                  ticker['open'],
-                                  ticker['high'],
-                                  ticker['low'],
-                                  ticker['close'],
-                                  ticker['vwap'],
-                                  ticker['previousClose'],
-                                  ticker['change'],
-                                  ticker['percentage'],
-                                  ticker['average'],
-                                  ticker['baseVolume'],
-                                  ticker['quoteVolume'],
-                                  ticker['last'],
-                                  json.dumps(ticker['info']),
-                                  ticker['datetime']
-                                  ))
-        
+            
+            command = table_ticker.insert().values(
+                exchange = name,
+                symbol = symbol,
+                ask = ticker['ask'],
+                askvolume = ticker['askVolume'],
+                bid = ticker['bid'],
+                bidvolume = ticker['bidVolume'],
+                open_24h = ticker['open'],
+                high_24h = ticker['high'],
+                low_24h = ticker['low'],
+                close_24h = ticker['close'],
+                last_price = ticker['last'],
+                vwap = ticker['vwap'],
+                previousclose_price = ticker['previousClose'],
+                price_change = ticker['change'],
+                percentage_change = ticker['percentage'],
+                average_price = ticker['average'],
+                basevolume = ticker['baseVolume'],
+                quotevolume = ticker['quoteVolume'],
+                info = ticker['info'],
+                datetime = datetime.datetime.fromisoformat(ticker['datetime']),
+                created_at = ticker['timestamp']
+                )
+            
+            #create timeless dict to check for uniqueness
+            unique_ticker = ticker.copy()
+            removal = ['timestamp', 'info', 'datetime']
+            for key in removal:
+                unique_ticker.pop(key)
+
+            if last_ticker is None:
+                last_ticker = [ticker, unique_ticker]                
+                with engine.connect() as conn:
+                    conn.execute(command)
+                    conn.commit()
+                    
+            if unique_ticker != last_ticker[1]:
+                
+                #if they are not equal insert new ticker
+                with engine.connect() as conn:
+                    conn.execute(command)
+                    conn.commit()
+                    
+                                
+                #set last ticker to new one
+                last_ticker[0] = ticker
+                last_ticker[1] = unique_ticker
+            
         except Exception as e:
             print(str(e))
             raise e
 
-async def main():
-    
-    #create db and tables
-    db = Database('data')
-    for name, columns in tables.items():
-        db.create_table(table_name = name,
-                        columns = columns, 
-                        drop_table = True,
-                        )
-    
-    
+async def main():    
     exchange = ccxt.pro.bybit({'newUpdates':True,'enableRateLimit': True, 'verbose':False})
-    await exchange.load_markets()
+    
+    await exchange.load_markets()        
     symbol = btc_inverse_perp
     
     loops = []
-    
-    
     if exchange.has["watchOHLCV"]:
-        loops.append(watch_ohlcv(exchange, symbol, timeframe, candle_limit, db))
-    
-    
+        loops.append(
+            watch_ohlcv(exchange, symbol, timeframe, candle_limit))
     if exchange.has["watchTicker"]:
-        loops.append(watch_ticker(exchange, symbol, db))
-    
-    
+        loops.append(
+            watch_ticker(exchange, symbol))
     if exchange.has["watchTrades"]:
-        loops.append(watch_trades(exchange, symbol, db))
-    
-    
+        loops.append(
+            watch_trades(exchange, symbol))
     if exchange.has["watchOrderBook"]:
-        loops.append(watch_order_book(exchange, symbol, orderbook_depth, db))
+        loops.append(
+            watch_order_book(exchange, symbol, orderbook_depth))
     
     while True:
-        try:
-            loops
-            await asyncio.gather(*loops)
-        
-        #https://docs.ccxt.com/#/?id=error-handling
-        except ccxt.DDoSProtection as e:
-            print(f"{exchange} ddos protected. Retrying in {timeout} seconds.")
-            db.insert_one(table_name = 'logs',
-                          data = (time.time(), e.args[0]))
-            time.sleep(timeout)
-            continue
-        
-        except ccxt.NetworkError as e:
-            print(f"{exchange} failed due to a network error: {str(e)}")  
-            db.insert_one(table_name = 'logs',
-                          data = (time.time(), e.args[0]))            
-            time.sleep(timeout)
-            continue
-        
-        except ccxt.ExchangeError as e:
-            print(f"{exchange} failed due to an exchange error: {str(e)}")
-            db.insert_one(table_name = logs,
-                          data = (time.time(), e.args[0]))
-            time.sleep(timeout)
-            continue
-        
-        except Exception as e:
-            print(type(e).__name__, str(e))
-            db.insert_one(table_name = 'logs',
-                          data = (time.time(), e.args[0]))
-            time.sleep(timeout)            
-            continue
-            
+        await asyncio.gather(*loops)
     await exchange.close()
 
 if __name__ == "__main__":
